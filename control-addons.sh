@@ -6,7 +6,7 @@ then
         exit
 fi
 
-modules="lttng-probe-addons lttng-packet lttng-ttwu lttng-elv"
+modules="lttng-probe-addons lttng-packet lttng-ttwu lttng-elv lttng-mmfree"
 
 virt_what=$(which virt-what)
 
