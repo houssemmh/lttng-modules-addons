@@ -73,6 +73,15 @@ LTTNG_TRACEPOINT_EVENT(addons_elv_merge_requests,
 	)
 )
 
+LTTNG_TRACEPOINT_EVENT(addons_process_meminfo,
+	TP_PROTO(int tid, int rss),
+	TP_ARGS(tid, rss),
+	TP_FIELDS(
+			ctf_integer(pid_t, tid, tid)
+			ctf_integer(long, rss, rss)
+	)
+)
+
 #endif /* LTTNG_ADDONS_H_ */
 
 /* This part must be outside protection */
