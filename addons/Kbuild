@@ -15,4 +15,4 @@ obj-$(CONFIG_LTTNG) += lttng-ttwu.o
 obj-$(CONFIG_LTTNG) += lttng-elv.o
 obj-$(CONFIG_LTTNG) += lttng-vmsync-guest.o
 obj-$(CONFIG_LTTNG) += lttng-vmsync-host.o
-obj-$(CONFIG_LTTNG) += lttng-mmfree.o
+obj-$(CONFIG_LTTNG) += lttng-meminfo.o

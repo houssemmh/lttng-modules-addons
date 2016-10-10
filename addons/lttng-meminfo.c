@@ -25,65 +25,89 @@
 #include <linux/kprobes.h>
 #include <linux/blkdev.h>
 #include <linux/spinlock.h>
-#include <linux/mm_types.h>
 #include <linux/rmap.h>
 #include <linux/page-flags.h>
+#include <linux/pagemap.h>
+#include <linux/sched.h>
+#include <linux/mm_types.h>
+#include <linux/timer.h>
 
 #include "../wrapper/tracepoint.h"
+//#include "../wrapper/mm_info.h"
 #include "../lttng-abi.h"
 #define LTTNG_INSTRUMENTATION
 #include "../instrumentation/events/lttng-module/addons.h"
 
-DEFINE_TRACE(addons_elv_merge_requests);
+DEFINE_TRACE(addons_process_meminfo);
 
-static int lttng_mmfree_probe(struct page *page) {
-	struct anon_vma *anon_vma = NULL;
-	unsigned long anon_mapping;
-	unsigned int mapcount;
-	pgoff_t pgoff;
-	struct anon_vma_chain *avc;
-	anon_mapping = (unsigned long) page->mapping;
-	// go out if the page is not anonymous
-	if (!PageAnon(page)) {
-		goto out;
-	}
-	anon_vma = (struct anon_vma *) (anon_mapping - PAGE_MAPPING_ANON);
-	if (!anon_vma)
-		goto out;
-	mapcount = page_mapcount(page);
-	pgoff = page_to_pgoff(page);
+extern struct task_struct init_task;
+int delay = 100;
+struct timer_list timer;
 
-	anon_vma_interval_tree_foreach(avc, &anon_vma->rb_root, pgoff, pgoff)
+void getMemInfo(unsigned long data) {
+	struct task_struct *p;
+	long rss_anon, rss_files, rss_kb;
+	struct mm_struct *mm;
+
+	mod_timer(&timer, jiffies + msecs_to_jiffies(delay));
+	rcu_read_lock();
+	for_each_process(p)
 	{
-		struct vm_area_struct *vma = avc->vma;
-		printk("%lu\n", vma->vm_start);
-	}
+		mm = get_task_mm(p);
+		if (mm) {
+			rss_anon = atomic_long_read(&mm->rss_stat.count[MM_ANONPAGES]);
+			rss_files = atomic_long_read(&mm->rss_stat.count[MM_FILEPAGES]);
+			rss_kb = (rss_anon + rss_files) << (PAGE_SHIFT - 10);
+			printk(KERN_INFO "process %s, pid:%d, rss: %lu\n", p->comm, p->pid,
+					rss_kb);
+			trace_addons_process_meminfo(p->pid, rss_kb);
+		}
 
-	printk("Free page %lu, Map count %u\n", page_to_pfn(page), mapcount);
-	out: jprobe_return();
-	return 0;
+	}
+	rcu_read_unlock();
+
 }
 
-static struct jprobe mmfree_jprobe = { .entry = lttng_mmfree_probe, .kp = {
-		.symbol_name = "free_pages_prepare", }, };
+//static int lttng_mmfree_probe(struct page *page, struct vm_area_struct *vma,
+//		unsigned long address) {
+//	printk(KERN_INFO "PROBE!\n");
+//out:
+//	jprobe_return();
+//	return 0;
+//
+//}
+
+//static struct jprobe mmfree_jprobe = { .entry = lttng_mmfree_probe, .kp = {
+//		.symbol_name = "page_move_anon_rmap", }, };
 
 static int __init lttng_addons_mmfree_init(void) {
-	int ret;
+//	int ret;
+//	ret = register_jprobe(&mmfree_jprobe);
 
 	(void) wrapper_lttng_fixup_sig(THIS_MODULE);
-	ret = register_jprobe(&mmfree_jprobe);
-	if (ret < 0) {
-		printk("register_jprobe failed, returned %d\n", ret);
-		goto out;
-	}
+	printk(KERN_INFO "Hello world!\n");
+	setup_timer(&timer, getMemInfo, 0);
+	mod_timer(&timer, jiffies + msecs_to_jiffies(delay));
+	return 0;
 
-	printk("lttng-mmfree loaded\n");
-	out: return ret;
+//
+//	(void) wrapper_lttng_fixup_sig(THIS_MODULE);
+//
+//	if (ret < 0) {
+//		printk("register_jprobe failed, returned %d\n", ret);
+//		goto out;
+//	}
+//
+//	printk("lttng-mmfree loaded\n");
+//out:
+//	return ret;
 }
+
 module_init(lttng_addons_mmfree_init);
 
 static void __exit lttng_addons_mmfree_exit(void) {
-	unregister_jprobe(&mmfree_jprobe);
+	del_timer(&timer);
+//	unregister_jprobe(&mmfree_jprobe);
 	printk("lttng-mmfree removed\n");
 }
 module_exit(lttng_addons_mmfree_exit);
