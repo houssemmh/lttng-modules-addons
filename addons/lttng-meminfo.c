@@ -1,7 +1,7 @@
 /*
- * addons/lttng-mmfree.c
+ * addons/lttng-meminfo.c
  *
- * Missing tracepoint for recovering the block device request chain
+ * Generate events for memory utilization of processes.
  *
  * Copyright (C) 2015 Mathieu Desnoyers <mathieu.desnoyers@efficios.com>
  *
@@ -23,14 +23,13 @@
 #include <linux/module.h>
 #include <linux/printk.h>
 #include <linux/kprobes.h>
-#include <linux/blkdev.h>
-#include <linux/spinlock.h>
 #include <linux/rmap.h>
 #include <linux/page-flags.h>
 #include <linux/pagemap.h>
 #include <linux/sched.h>
 #include <linux/mm_types.h>
 #include <linux/timer.h>
+#include <linux/workqueue.h>
 
 #include "../wrapper/tracepoint.h"
 //#include "../wrapper/mm_info.h"
@@ -41,15 +40,14 @@
 DEFINE_TRACE(addons_process_meminfo);
 
 extern struct task_struct init_task;
-int delay = 100;
-struct timer_list timer;
+int delay = 2000;
+struct workqueue_struct *meminfo_queue;
 
-void getMemInfo(unsigned long data) {
+static void getMemInfo(struct work_struct *work) {
 	struct task_struct *p;
 	long rss_anon, rss_files, rss_kb;
 	struct mm_struct *mm;
 
-	mod_timer(&timer, jiffies + msecs_to_jiffies(delay));
 	rcu_read_lock();
 	for_each_process(p)
 	{
@@ -65,10 +63,9 @@ void getMemInfo(unsigned long data) {
 
 	}
 	rcu_read_unlock();
-
 }
 
-//static int lttng_mmfree_probe(struct page *page, struct vm_area_struct *vma,
+//static int lttng_meminfo_probe(struct page *page, struct vm_area_struct *vma,
 //		unsigned long address) {
 //	printk(KERN_INFO "PROBE!\n");
 //out:
@@ -77,42 +74,34 @@ void getMemInfo(unsigned long data) {
 //
 //}
 
-//static struct jprobe mmfree_jprobe = { .entry = lttng_mmfree_probe, .kp = {
+//static struct jprobe meminfo_jprobe = { .entry = lttng_meminfo_probe, .kp = {
 //		.symbol_name = "page_move_anon_rmap", }, };
 
-static int __init lttng_addons_mmfree_init(void) {
-//	int ret;
-//	ret = register_jprobe(&mmfree_jprobe);
+static int __init lttng_addons_meminfo_init(void) {
 
+	struct delayed_work *showinfo_work;
 	(void) wrapper_lttng_fixup_sig(THIS_MODULE);
+//	int ret;
+//	ret = register_jprobe(&meminfo_jprobe);
+	showinfo_work = kmalloc( sizeof(struct delayed_work), GFP_KERNEL);
 	printk(KERN_INFO "Hello world!\n");
-	setup_timer(&timer, getMemInfo, 0);
-	mod_timer(&timer, jiffies + msecs_to_jiffies(delay));
+	meminfo_queue = create_workqueue("meminfo_queue");
+	INIT_DELAYED_WORK( showinfo_work, getMemInfo );
+	queue_delayed_work(meminfo_queue, showinfo_work, msecs_to_jiffies(delay));
 	return 0;
-
-//
-//	(void) wrapper_lttng_fixup_sig(THIS_MODULE);
-//
-//	if (ret < 0) {
-//		printk("register_jprobe failed, returned %d\n", ret);
-//		goto out;
-//	}
-//
-//	printk("lttng-mmfree loaded\n");
-//out:
-//	return ret;
 }
 
-module_init(lttng_addons_mmfree_init);
+module_init(lttng_addons_meminfo_init);
 
-static void __exit lttng_addons_mmfree_exit(void) {
-	del_timer(&timer);
-//	unregister_jprobe(&mmfree_jprobe);
-	printk("lttng-mmfree removed\n");
+static void __exit lttng_addons_meminfo_exit(void) {
+	flush_workqueue( meminfo_queue );
+	destroy_workqueue( meminfo_queue );
+//	unregister_jprobe(&meminfo_jprobe);
+	printk("lttng-meminfo removed\n");
 }
-module_exit(lttng_addons_mmfree_exit);
+module_exit(lttng_addons_meminfo_exit);
 
 MODULE_LICENSE("GPL and additional rights");
-MODULE_AUTHOR("Francis Giraldeau <francis.giraldeau@gmail.com>");
-MODULE_DESCRIPTION("LTTng block elevator event");
+MODULE_AUTHOR("Houssem Daoud <houssemmh@gmail.com>");
+MODULE_DESCRIPTION("LTTng meminfo event");
 
