@@ -74,11 +74,14 @@ LTTNG_TRACEPOINT_EVENT(addons_elv_merge_requests,
 )
 
 LTTNG_TRACEPOINT_EVENT(addons_process_meminfo,
-	TP_PROTO(int tid, int rss),
-	TP_ARGS(tid, rss),
+	TP_PROTO(pid_t tid, long rss, long vm, long rss_anon, long rss_files),
+	TP_ARGS(tid, rss, vm, rss_anon, rss_files),
 	TP_FIELDS(
 			ctf_integer(pid_t, tid, tid)
+			ctf_integer(long, vm, vm)
 			ctf_integer(long, rss, rss)
+			ctf_integer(long, rss_anon, rss_anon)
+			ctf_integer(long, rss_files, rss_files)
 	)
 )
 
