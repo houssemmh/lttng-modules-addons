@@ -40,7 +40,7 @@
 #include "../instrumentation/events/lttng-module/addons.h"
 
 DEFINE_TRACE(addons_process_meminfo);
-#define EVENTS_THRESHOLD 100
+#define MEMORY_THRESHOLD 51200
 #define DELAY 500
 
 extern struct task_struct init_task;
@@ -58,7 +58,7 @@ struct process_key_t {
 
 struct process_val_t {
   pid_t tgid;
-  int memEvents;
+  long memVariability;
   struct hlist_node hlist;
   struct rcu_head rcu;
 };
@@ -107,7 +107,7 @@ static void insert_process_ht(struct task_struct *p) {
 	hash = jhash(&key, sizeof(key), 0);
 	val = kzalloc(sizeof(struct process_val_t), GFP_KERNEL);
 	val->tgid = key.tgid;
-	val->memEvents = 0;
+	val->memVariability = 0;
 	hash_add_rcu(process_map, &val->hlist, hash);
 }
 
@@ -179,8 +179,8 @@ static void getMemInfo(struct work_struct *work) {
 	queue_delayed_work(meminfo_queue, &wq_data.delayed_getMemInfo, msecs_to_jiffies(wq_data.delay));
 }
 
-static int lttng_meminfo_probe(struct page *page, struct vm_area_struct *vma,
-		unsigned long address) {
+static int lttng_page_alloc_probe(gfp_t gfp_mask, unsigned int order,
+		struct zonelist *zonelist, nodemask_t *nodemask) {
 	u32 hash;
 	struct process_key_t key;
 	struct process_val_t *val;
@@ -189,27 +189,57 @@ static int lttng_meminfo_probe(struct page *page, struct vm_area_struct *vma,
 	p = get_current();
 	key.tgid = p->tgid;
 	hash = jhash(&key, sizeof(key), 0);
+	rcu_read_lock();
 	val = find_process_ht(&key, hash);
 	if (val == NULL)
+	{
+		rcu_read_unlock();
 		goto out;
-
-	if(++val->memEvents >= EVENTS_THRESHOLD)
+	}
+	val->memVariability += (1 << order) * 4;
+	if(val->memVariability >= MEMORY_THRESHOLD)
 	{
 		getProcessMemInfo(p);
-		val->memEvents = 0;
+		val->memVariability = 0;
 	}
-
-
+	rcu_read_unlock();
 out:
 	jprobe_return();
 	return 0;
-
 }
 
-static struct jprobe memalloc_jprobe = { .entry = lttng_meminfo_probe, .kp = {
+static bool lttng_page_free_probe(struct page *page, unsigned int order) {
+	u32 hash;
+	struct process_key_t key;
+	struct process_val_t *val;
+	struct task_struct *p;
+
+	p = get_current();
+	key.tgid = p->tgid;
+	hash = jhash(&key, sizeof(key), 0);
+	rcu_read_lock();
+	val = find_process_ht(&key, hash);
+	if (val == NULL)
+	{
+		rcu_read_unlock();
+		goto out;
+	}
+	val->memVariability -= (1 << order) * 4;
+	if(val->memVariability <= -MEMORY_THRESHOLD)
+	{
+		getProcessMemInfo(p);
+		val->memVariability = 0;
+	}
+	rcu_read_unlock();
+out:
+	jprobe_return();
+	return 0;
+}
+
+static struct jprobe memalloc_jprobe = { .entry = lttng_page_alloc_probe, .kp = {
 		.symbol_name = "__alloc_pages_nodemask", }, };
 
-static struct jprobe memfree_jprobe = { .entry = lttng_meminfo_probe, .kp = {
+static struct jprobe memfree_jprobe = { .entry = lttng_page_free_probe, .kp = {
 		.symbol_name = "free_pages_prepare", }, };
 
 static int __init lttng_addons_meminfo_init(void)
