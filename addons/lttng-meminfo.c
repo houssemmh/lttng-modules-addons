@@ -40,12 +40,13 @@
 #include "../instrumentation/events/lttng-module/addons.h"
 
 DEFINE_TRACE(addons_process_meminfo);
-#define MEMORY_THRESHOLD 51200
+#define MB_T0_BYTE(x) (x << 20)
 #define DELAY 500
 
 extern struct task_struct init_task;
 struct workqueue_struct *meminfo_queue;
 static DEFINE_HASHTABLE(process_map, 3);
+static int default_threashold = 10;
 
 /**
  * process_key_t is the key of the hashtable.
@@ -58,7 +59,7 @@ struct process_key_t {
 
 struct process_val_t {
   pid_t tgid;
-  long memVariability;
+  atomic_long_t memVariability;
   struct hlist_node hlist;
   struct rcu_head rcu;
 };
@@ -107,22 +108,8 @@ static void insert_process_ht(struct task_struct *p) {
 	hash = jhash(&key, sizeof(key), 0);
 	val = kzalloc(sizeof(struct process_val_t), GFP_KERNEL);
 	val->tgid = key.tgid;
-	val->memVariability = 0;
+	atomic_long_set(&val->memVariability, 0);
 	hash_add_rcu(process_map, &val->hlist, hash);
-}
-
-/**
- * Show the content of the hashtable
- */
-static void show_process_map(void) {
-	struct process_val_t *process_val;
-	int bkt;
-	rcu_read_lock();
-	hash_for_each_rcu(process_map, bkt, process_val, hlist)
-	{
-		printk(KERN_INFO "Hash contains process %d\n",process_val->tgid);
-	}
-	rcu_read_unlock();
 }
 
 /**
@@ -147,11 +134,11 @@ static void getProcessMemInfo(struct task_struct *p)
 	struct mm_struct *mm;
 
 	mm = get_task_mm(p);
-	rss_anon = atomic_long_read(&mm->rss_stat.count[MM_ANONPAGES]) << (PAGE_SHIFT - 10);
-	rss_files = atomic_long_read(&mm->rss_stat.count[MM_FILEPAGES]) << (PAGE_SHIFT - 10);
+	rss_anon = atomic_long_read(&mm->rss_stat.count[MM_ANONPAGES]) << PAGE_SHIFT;
+	rss_files = atomic_long_read(&mm->rss_stat.count[MM_FILEPAGES]) << PAGE_SHIFT;
 	total_rss = rss_anon + rss_files;
-	swap = atomic_long_read(&mm->rss_stat.count[MM_SWAPENTS]) << (PAGE_SHIFT - 10);
-	total_vm = mm->total_vm << (PAGE_SHIFT - 10);
+	swap = atomic_long_read(&mm->rss_stat.count[MM_SWAPENTS]) << PAGE_SHIFT;
+	total_vm = mm->total_vm << PAGE_SHIFT;
 
 	//printk(KERN_INFO "process %s, pid:%d, rss: %lu\n", p->comm, p->pid, rss_kb);
 	trace_addons_process_meminfo(p->pid, total_rss, total_vm, rss_anon, rss_files);
@@ -182,6 +169,7 @@ static void getMemInfo(struct work_struct *work) {
 static int lttng_page_alloc_probe(gfp_t gfp_mask, unsigned int order,
 		struct zonelist *zonelist, nodemask_t *nodemask) {
 	u32 hash;
+	int operationSize;
 	struct process_key_t key;
 	struct process_val_t *val;
 	struct task_struct *p;
@@ -196,11 +184,12 @@ static int lttng_page_alloc_probe(gfp_t gfp_mask, unsigned int order,
 		rcu_read_unlock();
 		goto out;
 	}
-	val->memVariability += (1 << order) * 4;
-	if(val->memVariability >= MEMORY_THRESHOLD)
+	operationSize = (1 << order) << PAGE_SHIFT;
+
+	if(atomic_long_add_return(operationSize, &val->memVariability) >= MB_T0_BYTE(default_threashold))
 	{
 		getProcessMemInfo(p);
-		val->memVariability = 0;
+		atomic_long_set(&val->memVariability, 0);
 	}
 	rcu_read_unlock();
 out:
@@ -210,6 +199,7 @@ out:
 
 static bool lttng_page_free_probe(struct page *page, unsigned int order) {
 	u32 hash;
+	int operationSize;
 	struct process_key_t key;
 	struct process_val_t *val;
 	struct task_struct *p;
@@ -224,11 +214,11 @@ static bool lttng_page_free_probe(struct page *page, unsigned int order) {
 		rcu_read_unlock();
 		goto out;
 	}
-	val->memVariability -= (1 << order) * 4;
-	if(val->memVariability <= -MEMORY_THRESHOLD)
+	operationSize = (1 << order) << PAGE_SHIFT;
+	if(atomic_long_sub_return(operationSize, &val->memVariability) <= -MB_T0_BYTE(default_threashold))
 	{
 		getProcessMemInfo(p);
-		val->memVariability = 0;
+		atomic_long_set(&val->memVariability, 0);
 	}
 	rcu_read_unlock();
 out:
@@ -275,4 +265,20 @@ module_exit(lttng_addons_meminfo_exit);
 MODULE_LICENSE("GPL and additional rights");
 MODULE_AUTHOR("Houssem Daoud <houssemmh@gmail.com>");
 MODULE_DESCRIPTION("LTTng meminfo event");
+
+
+
+/**
+ * Show the content of the hashtable
+
+static void show_process_map(void) {
+	struct process_val_t *process_val;
+	int bkt;
+	rcu_read_lock();
+	hash_for_each_rcu(process_map, bkt, process_val, hlist)
+	{
+		printk(KERN_INFO "Hash contains process %d\n",process_val->tgid);
+	}
+	rcu_read_unlock();
+}*/
 
