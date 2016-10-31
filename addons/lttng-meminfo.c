@@ -226,11 +226,38 @@ out:
 	return 0;
 }
 
+static int lttng_mmap_brk_munmap_probe(struct kretprobe_instance *ri, struct pt_regs *regs) {
+	u32 hash;
+	struct process_key_t key;
+	struct process_val_t *val;
+	struct task_struct *p;
+
+	p = get_current();
+	key.tgid = p->tgid;
+	hash = jhash(&key, sizeof(key), 0);
+	rcu_read_lock();
+	val = find_process_ht(&key, hash);
+	if (val == NULL)
+	{
+		rcu_read_unlock();
+		return 0;
+	}
+	getProcessMemInfo(p);
+	rcu_read_unlock();
+	return 0;
+}
+
 static struct jprobe memalloc_jprobe = { .entry = lttng_page_alloc_probe, .kp = {
 		.symbol_name = "__alloc_pages_nodemask", }, };
 
 static struct jprobe memfree_jprobe = { .entry = lttng_page_free_probe, .kp = {
 		.symbol_name = "free_pages_prepare", }, };
+
+static struct kretprobe mmap_kretprobe = { .handler = lttng_mmap_brk_munmap_probe, .kp = {
+		.symbol_name = "sys_mmap_pgoff", }, };
+
+static struct kretprobe munmap_kretprobe = { .handler = lttng_mmap_brk_munmap_probe, .kp = {
+		.symbol_name = "vm_munmap", }, };
 
 static int __init lttng_addons_meminfo_init(void)
 {
@@ -238,6 +265,8 @@ static int __init lttng_addons_meminfo_init(void)
 
 	ret = register_jprobe(&memalloc_jprobe);
 	ret = register_jprobe(&memfree_jprobe);
+	ret = register_kretprobe(&mmap_kretprobe);
+	ret = register_kretprobe(&munmap_kretprobe);
 	(void) wrapper_lttng_fixup_sig(THIS_MODULE);
 	printk(KERN_INFO "Lttng_meminfo loaded\n");
 	meminfo_queue = create_workqueue("meminfo_queue");
@@ -258,6 +287,8 @@ static void __exit lttng_addons_meminfo_exit(void) {
 	/* unregister the jprobe event*/
 	unregister_jprobe(&memalloc_jprobe);
 	unregister_jprobe(&memfree_jprobe);
+	unregister_kretprobe(&mmap_kretprobe);
+	unregister_kretprobe(&munmap_kretprobe);
 	printk("Lttng_meminfo unloaded\n");
 }
 module_exit(lttng_addons_meminfo_exit);
