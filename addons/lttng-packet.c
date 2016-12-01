@@ -84,11 +84,12 @@ DEFINE_NFHOOK(nf_hookfn_inet_local_in)
 	struct tcphdr *tcph;
 	struct sock *sk;
 	struct iphdr *iph = ip_hdr(skb);
+	bool refcounted;
 	if (iph->protocol == IPPROTO_TCP) {
 		/* tcp_hdr macro doesn't return correct offset into skb->data, doing it ourselves */
 		//tcph = tcp_hdr(skb);
 		tcph = (struct tcphdr *)(skb->data + (iph->ihl << 2 ));
-		sk = __inet_lookup_skb(&tcp_hashinfo, skb, tcph->source, tcph->dest);
+		sk = __inet_lookup_skb(&tcp_hashinfo, skb, __tcp_hdrlen(tcph), tcph->source, tcph->dest, &refcounted);
 		trace_inet_sock_local_in(sk, tcph);
 		if (sk)
 		    sock_put(sk);
